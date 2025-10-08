@@ -83,7 +83,7 @@ drop_down_keys = ["foreignFunding", "typeOfContractPricing"]
 duplicate_id_keys = ["totalEstimatedOrderValue"]
 
 # load env 
-load_dotenv()
+load_dotenv(override=True)
 
 # open router
 client = OpenAI(
@@ -92,16 +92,19 @@ client = OpenAI(
     default_headers={"HTTP-Referer": "http://localhost:5000"}
 )
 
+
+# get award id
 try:
     html_to_scrape,award_id = None, sys.argv[1] # in case main scraper fails, scrape html object
 except Exception:
-    logging.error(f"{award_id}, no award id passed")
+    logging.info(f"{award_id}, no award id passed")
     print(f"{award_id}, no award id passed, exiting ...")
     os._exit(1)
 
+
 #supabase
-DB_USER = "postgres.krqimyqweygsvlzjakyh"
-DB_HOST = "aws-1-us-east-2.pooler.supabase.com"
+DB_USER = "postgres"
+DB_HOST = "db.byhpfvdicvtmwnuwrbtp.supabase.co"
 DB_PORT = 6543
 DB_NAME = "postgres"
 DB_PASSWORD = os.getenv("DB_PASSWORD")
@@ -111,9 +114,10 @@ conn = psycopg2.connect(
     password=DB_PASSWORD,
     host=DB_HOST,
     port=DB_PORT,
-    dbname=DB_NAME
+    dbname=DB_NAME,
+    sslmode="require"
 )
-
+print('connected')
 
 def camel_to_snake(name):
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
@@ -146,16 +150,20 @@ def insert_json_db(json_data, award_id):
                 values = list(json_data.values())
 
                 insert_query = sql.SQL(
-                    "INSERT INTO scraped_data7 ({columns}) VALUES ({values})"
+                    "INSERT INTO scraped_data_fpds ({columns}) VALUES ({values}) RETURNING id"
                 ).format(
                     columns=sql.SQL(', ').join(map(sql.Identifier, columns)),
                     values=sql.SQL(', ').join(sql.Placeholder() * len(columns))
                 )
+
                 cur.execute(insert_query, values)
+                fpds_id = cur.fetchone()
+
+                # update to connect fpds to other tables 
+                award_query = sql.SQL("UPDATE u_awards SET fpds_id=%s WHERE award_number=%s;")
+                delivery_query = sql.SQL("UPDATE u_delivery_orders SET fpds_id=%s WHERE award_number=%s;")                            
                 
-                # create an update statement on either of the two tables
-                
-                
+                cur.execute(award_query, (fpds_id, award_id))         
                 
                 
     except Exception:
