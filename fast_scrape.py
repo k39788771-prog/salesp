@@ -137,14 +137,29 @@ def insert_db(json_data, award_id):
                 
     except Exception:
         tracer = traceback.format_exc()
+        print("error inserting award id: ", award_id)
         logging.error(f"Error inserting into database for award {award_id}, stacktrace: {tracer}")
         raise
 
 def scrape_award_data(award_id, keys_config, driver):
     try:
         driver.get('https://www.fpds.gov/ezsearch/search.do?indexName=awardfull&templateName=1.5.3&s=FPDS.GOV&q=' + award_id)
-        wait = WebDriverWait(driver, 10)
-        
+        wait = WebDriverWait(driver, 5)
+
+        # conditions to wait for
+        view_link_condition = EC.element_to_be_clickable((By.XPATH, "//a[@title='View']"))
+        no_results_condition = EC.presence_of_element_located((By.XPATH, "//span[@class='warning_text' and text()='No Results Found']"))
+
+        try:
+            wait.until(EC.any_of(view_link_condition, no_results_condition))
+        except Exception:
+            return None
+
+        if driver.find_elements(By.XPATH, "//span[@class='warning_text' and text()='No Results Found.']"):
+            logging.info(f"No results found for award {award_id}")
+            print(f"No results found {award_id}")
+            return {}
+
         view_link = wait.until(
             EC.element_to_be_clickable((By.XPATH, "(//a[@title='View'])"))
         )
@@ -154,6 +169,7 @@ def scrape_award_data(award_id, keys_config, driver):
         driver.switch_to.window(all_window_handles[-1])
         
         wait.until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
+
         html_to_scrape = driver.page_source
         soup = BeautifulSoup(html_to_scrape, 'lxml')
 
@@ -187,8 +203,9 @@ def scrape_award_data(award_id, keys_config, driver):
         return scraped_data
 
     except Exception:
-        #tracer = traceback.format_exc()
-        logging.error(f"Error scraping award {award_id}, stacktrace: ")
+        tracer = traceback.format_exc()
+        print("error scraping award id: ", award_id)
+        logging.error(f"Error scraping award {award_id}, stacktrace: {tracer}")
         return None
     finally:
         if len(driver.window_handles) > 1:
@@ -210,6 +227,7 @@ def main():
     options.page_load_strategy = 'eager' 
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
+
 
     try:
         for award_id in award_ids:
