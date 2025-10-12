@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Oct 11 13:52:26 2025
+
+@author: algo-env
+"""
+
+import psycopg2
+import os
+import csv
+
+# db credentials
+DB_USER = "postgres"
+DB_HOST = "db.byhpfvdicvtmwnuwrbtp.supabase.co"
+DB_PORT = 6543
+DB_NAME = "postgres"
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+
+"""
+1) cron executes executes get_daily_award_deliveries @ 12 pm 
+    -> writes two files to local directory
+    -> deletes files 3 days old (in case overloaded)
+
+2) sh script executes fast_scrape_io.py 
+    -> gets date for the file
+    -> executes cat parallel command to run scraper
+"""
+
+def get_delivery_order_numbers(conn):
+    try:
+        with conn.cursor() as cur:
+            query = """
+            select distinct d.delivery_order_number
+            from u_opportunities o
+            join u_opportunity_products op on op.opportunity_uid = o.uid
+            join u_delivery_order_items i on i.product_id = op.product_id
+            join u_delivery_orders d on d.delivery_order_number=i.delivery_order_number and d.award_number=i.award_number
+            join u_awards a on a.award_number=d.award_number
+            where (o.contract_status = 'Unknown' or o.contract_status = 'Open');
+            """
+            cur.execute(query)
+            delivery_order_numbers = cur.fetchall()
+            return delivery_order_numbers
+    except (psycopg2.DatabaseError, Exception) as error:
+        print(f"Error fetching delivery order numbers: {error}")
+        return None
+
+def get_award_numbers(conn):
+    try:
+        with conn.cursor() as cur:
+            query = """
+            select distinct a.award_number
+            from u_opportunities o
+            join u_opportunity_products op on op.opportunity_uid = o.uid
+            join u_delivery_order_items i on i.product_id = op.product_id
+            join u_delivery_orders d on d.delivery_order_number=i.delivery_order_number and d.award_number=i.award_number
+            join u_awards a on a.award_number=d.award_number
+            where (o.contract_status = 'Unknown' or o.contract_status = 'Open');
+            """
+            cur.execute(query)
+            award_numbers = cur.fetchall()
+            return award_numbers
+    except (psycopg2.DatabaseError, Exception) as error:
+        print(f"Error fetching award numbers: {error}")
+        return None
+
+
+def write_list_to_csv(filename, data):
+    with open(filename, 'w', newline='') as csvfile:
+        csv_writer = csv.writer(csvfile)
+        csv_writer.writerows(data)
+
+# run get delivery codes & write the list to file
+#write_list_to_csv(write_url, array[index:])
+
+# run get award codes & write the list to file
+#write_list_to_csv(write_url, array[index:])
+
+
+
+
