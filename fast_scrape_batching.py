@@ -134,7 +134,7 @@ def insert_db_batch(batch_data):
                     data_to_insert = [tuple(record.values()) for record in insert_records]
                     
                     insert_query_template = sql.SQL(
-                        "INSERT INTO scraped_data_fpds_test ({columns}) VALUES ({values}) RETURNING id, award_id"
+                        "INSERT INTO scraped_data_fpds ({columns}) VALUES ({values}) RETURNING id, award_id"
                     ).format(
                         columns=sql.SQL(', ').join(map(sql.Identifier, columns)),
                         values=sql.SQL(', ').join(sql.Placeholder() * len(columns))
@@ -145,9 +145,9 @@ def insert_db_batch(batch_data):
                     update_data = cur.fetchall()
 
                 # Batch update u_awards
-#                if update_data:
- #                   award_query_template = sql.SQL("UPDATE u_awards SET fpds_id=%s WHERE award_number=%s;")
-  #                  extras.execute_batch(cur, award_query_template, update_data)
+                if update_data:
+                    award_query_template = sql.SQL("UPDATE u_awards SET fpds_id=%s WHERE award_number=%s;")
+                    extras.execute_batch(cur, award_query_template, update_data)
         
     except Exception:
         tracer = traceback.format_exc()
@@ -156,6 +156,7 @@ def insert_db_batch(batch_data):
 
 def scrape_award_data(award_id, keys_config, driver):
     try:
+        time.sleep(random.uniform(5, 15))
         driver.get('https://www.fpds.gov/ezsearch/search.do?indexName=awardfull&templateName=1.5.3&s=FPDS.GOV&q=' + award_id)
         
         # wait for page load up to 5 seconds
@@ -175,6 +176,7 @@ def scrape_award_data(award_id, keys_config, driver):
         # if found no results return None 
         if driver.find_elements(By.XPATH, "//span[@class='warning_text' and text()='No Results Found.']"):
             logging.info(f"No results found for award {award_id}")
+          
             return None
 
         # else click thru to the second page
@@ -265,7 +267,7 @@ def main():
         for award_id in award_ids:
             try:
                 logging.info(f"Starting scrape for award ID: {award_id}")
-                print('scraping: ', award_id)
+             
                 scraped_data = scrape_award_data(award_id, keys, driver)
                 if scraped_data is not None:
                     batch_data_to_insert.append({'award_id': award_id, 'json_data': scraped_data})
@@ -273,11 +275,12 @@ def main():
                 else:
                     logging.warning(f"Failed to scrape award ID: {award_id}")
                 
-                time.sleep(random.uniform(0, 0.05))
+            
                 
             except Exception:
                 tracer = traceback.format_exc()
                 logging.error(f"Failed to process award ID {award_id}, skipping. Stacktrace: {tracer}")
+                print(f"error {award_id} {tracer}") 
                 # reset the driver on critical error
                 if driver:
                     driver.quit()
@@ -306,4 +309,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
