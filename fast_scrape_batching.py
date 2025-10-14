@@ -13,16 +13,19 @@ import logging
 import psycopg2
 import time
 import random
+import warnings
+from fake_useragent import UserAgent
 from psycopg2 import sql, extras
+from selenium_stealth import stealth
 from dotenv import load_dotenv
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+from seleniumwire import undetected_chromedriver as uc
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.action_chains import ActionChains
 from bs4 import BeautifulSoup
+
+warnings.filterwarnings("ignore")
 
 keys = {
     "displayIDVType": {"type": "text"},
@@ -76,6 +79,9 @@ duplicate_id_keys = ["totalEstimatedOrderValue"]
 # load .env
 load_dotenv(override=True)
 
+# alter agents
+ua = UserAgent()
+
 # logger
 cur_dir = os.path.dirname(os.path.abspath(__file__))
 log_file_path = os.path.join(cur_dir, 'fpds_scrape.log')
@@ -93,6 +99,63 @@ DB_PORT = 6543
 DB_NAME = "postgres"
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 
+
+def human_like_mouse_movement(driver):
+    pause_range = [0.1, 0.3]
+    actions = ActionChains(driver)    
+
+    steps = random.randint(1,5)
+    
+    for _ in range(steps):
+        x_offset = random.randint(-100, 100)
+        y_offset = random.randint(-100, 100)
+        
+        actions.move_by_offset(x_offset, y_offset).perform()        
+        time.sleep(random.uniform(pause_range[0], pause_range[1]))
+
+def setup_proxy_driver():
+    try:
+        chrome_options = uc.ChromeOptions()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--ignore-certificate-errors")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920x1080")
+        chrome_options.add_argument("--log-level=3")
+        chrome_options.add_argument(f"--user-agnt={ua.random}")
+        chrome_options.page_load_strategy = 'eager'
+        
+        driver = uc.Chrome(options=chrome_options)
+        stealth(driver,
+          languages=["en-US", "en"],
+          vendor="Google Inc.",
+          platform="Win32",
+          webgl_vendor="Intel Inc.",
+          renderer="Intel Iris OpenGL Engine",
+          fix_hairline=True,
+         )
+
+
+        refs = ['google.com','firefox.com', 'https://www.fpds.gov/',
+                'https://www.fpds.gov/fpdsng_cms/index.php/en/',
+                'https://www.fpds.gov/fpdsng_cms/index.php/en/',
+                'https://www.fpds.gov/fpdsng_cms/index.php/en/',
+                'https://www.fpds.gov/ezsearch/fpdsportal?indexName=awardfull&templateName=1.5.3&s=ICD&q=1675&x=0&y=0',
+                'https://www.fpds.gov/ezsearch/fpdsportal?q=REF_IDV_PIID%3AGS00P13BSD1004+CONTRACT_TYPE%3AAWARD&s=ICD&indexName=awardfull&version=1.4.2&&templateName=1.5.3',
+                'https://www.fpds.gov/fpdsng_cms/index.php/en/?view=article&id=39:ezsearch-portal&catid=26',
+                'https://www.federalcompass.com/blog/fpds-ez-search',
+                ]
+
+        def interceptor(request):
+            request.headers['Referer'] = refs[random.randint(0,9)]
+
+        driver.request_interceptor = interceptor
+        
+        return driver
+    except:
+        logging.info('failed to get driver on proxy')
+    
 
 def camel_to_snake(name):
     s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
@@ -134,7 +197,7 @@ def insert_db_batch(batch_data):
                     data_to_insert = [tuple(record.values()) for record in insert_records]
                     
                     insert_query_template = sql.SQL(
-                        "INSERT INTO scraped_data_fpds ({columns}) VALUES ({values}) RETURNING id, award_id"
+                        "INSERT INTO scraped_data_fpds_test ({columns}) VALUES ({values}) RETURNING id, award_id"
                     ).format(
                         columns=sql.SQL(', ').join(map(sql.Identifier, columns)),
                         values=sql.SQL(', ').join(sql.Placeholder() * len(columns))
@@ -154,10 +217,14 @@ def insert_db_batch(batch_data):
         logging.error(f"Error inserting batch into database, stacktrace: {tracer}")
         raise
 
-def scrape_award_data(award_id, keys_config, driver):
+def scrape_award_data(award_id, keys_config):
     try:
-        time.sleep(random.uniform(5, 15))
-        driver.get('https://www.fpds.gov/ezsearch/search.do?indexName=awardfull&templateName=1.5.3&s=FPDS.GOV&q=' + award_id)
+        driver = setup_proxy_driver()
+        
+        driver.get('http://www.fpds.gov/ezsearch/search.do?indexName=awardfull&templateName=1.5.3&s=FPDS.GOV&q=' + award_id)
+        
+        # move mouse, avoid detection
+        human_like_mouse_movement(driver)
         
         # wait for page load up to 5 seconds
         wait = WebDriverWait(driver, 5)
@@ -170,14 +237,14 @@ def scrape_award_data(award_id, keys_config, driver):
         try:
             wait.until(EC.any_of(view_link_condition, no_results_condition))
         except Exception:
-            logging.error(f"Timed out waiting for search results for award {award_id}")
+            tracer = traceback.format_exc()
+            logging.error(f"Timed out waiting for search results for award {award_id}, {tracer}")
             return None
 
         # if found no results return None 
         if driver.find_elements(By.XPATH, "//span[@class='warning_text' and text()='No Results Found.']"):
             logging.info(f"No results found for award {award_id}")
-          
-            return None
+            return 'No Results'
 
         # else click thru to the second page
         view_link = driver.find_element(By.XPATH, "//a[@title='View']")
@@ -235,7 +302,6 @@ def scrape_award_data(award_id, keys_config, driver):
     except Exception:
         tracer = traceback.format_exc()
         logging.error(f"Error scraping award {award_id}, stacktrace: {tracer}")
-        print(f'error scraping: {tracer}')
         return None
     finally:
         # close the tab and switch back to the original
@@ -243,6 +309,20 @@ def scrape_award_data(award_id, keys_config, driver):
             driver.close()
             driver.switch_to.window(driver.window_handles[0])
 
+def main_scrape_entry(award_id, key_config):
+    # this function simply reruns main scraper 5 times on different proxies if fail
+    max_retries = 1
+    for attempt in range(max_retries):
+        try:
+            result = scrape_award_data(award_id, key_config)
+            if result == 'No Results': # if no result kill loop
+                break
+            elif result is not None: # if scraped result return
+                return result
+      
+        except:
+            pass
+            
 
 def main():
     award_ids = [line.strip() for line in sys.stdin if line.strip()]
@@ -250,62 +330,21 @@ def main():
         logging.info("No award IDs received, exiting...")
         sys.exit(0)
     
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--log-level=3")
-    options.page_load_strategy = 'eager' 
-    
     batch_data_to_insert = []   
-    
-    driver = None
-    try:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
         
-        for award_id in award_ids:
-            try:
-                logging.info(f"Starting scrape for award ID: {award_id}")
-             
-                scraped_data = scrape_award_data(award_id, keys, driver)
-                if scraped_data is not None:
-                    batch_data_to_insert.append({'award_id': award_id, 'json_data': scraped_data})
-                    logging.info(f"Successfully scraped award ID: {award_id}")
-                else:
-                    logging.warning(f"Failed to scrape award ID: {award_id}")
-                
-            
-                
-            except Exception:
-                tracer = traceback.format_exc()
-                logging.error(f"Failed to process award ID {award_id}, skipping. Stacktrace: {tracer}")
-                print(f"error {award_id} {tracer}") 
-                # reset the driver on critical error
-                if driver:
-                    driver.quit()
-                driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    for award_id in award_ids:
 
-    except Exception:
-        tracer = traceback.format_exc()
-        logging.error(f"Failed to initialize webdriver for batch. Stacktrace: {tracer}")
+        scraped_data = main_scrape_entry(award_id, keys)
         
-    finally:
-        if driver:
-            driver.quit()
-
+        if scraped_data is not None and scraped_data != 'No Results':
+            batch_data_to_insert.append({'award_id': award_id, 'json_data': scraped_data})
+            logging.info(f"Successfully scraped award ID: {award_id}")
+        time.sleep(random.randint(1, 3))
+        
     insert_db_batch(batch_data_to_insert)
-    logging.info(f"batch insert completed for {len(batch_data_to_insert)} records.")
-
-
-
-
-
-
-
-
-
-
+    print('siccess')
+    
 
 if __name__ == "__main__":
     main()
+    
